@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Scratch / generated migration artifacts
+*.rollback.sql
+*.rewrite.sql
+/tmp-pg/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
