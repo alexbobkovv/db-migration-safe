@@ -138,11 +138,11 @@ def invert_alter(orig, table, action):
 
     a = action.strip().rstrip(";")
 
-    m = re.match(rf"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?({IDENT})\b", a, re.I)
+    m = re.match(rf"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?({IDENT})(?=\W|$)", a, re.I)
     if m:
         return ok(orig, f"ALTER TABLE {table} DROP COLUMN IF EXISTS {m.group(1)};")
 
-    m = re.match(rf"DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?({IDENT})\b", a, re.I)
+    m = re.match(rf"DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?({IDENT})(?=\W|$)", a, re.I)
     if m:
         col = m.group(1)
         backup = f"{bare(table)}_{bare(col)}_backup_{TODAY}"
@@ -156,11 +156,11 @@ def invert_alter(orig, table, action):
             f"-- UPDATE {table} t SET {col} = b.{col} FROM {backup} b WHERE t.<pk> = b.<pk>;",
         ])
 
-    m = re.match(rf"ADD\s+CONSTRAINT\s+({IDENT})\b", a, re.I)
+    m = re.match(rf"ADD\s+CONSTRAINT\s+({IDENT})(?=\W|$)", a, re.I)
     if m:
         return ok(orig, f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {m.group(1)};")
 
-    m = re.match(rf"DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?({IDENT})\b", a, re.I)
+    m = re.match(rf"DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?({IDENT})(?=\W|$)", a, re.I)
     if m:
         return manual(orig, f"cannot recreate constraint {m.group(1)} from its name alone; "
                             f"restore the original ADD CONSTRAINT definition")
@@ -224,7 +224,7 @@ def invert(stmt):
     if m:
         return ok(orig, f"DROP TABLE IF EXISTS {m.group(1)};")
 
-    m = re.match(rf"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?({QNAME})\b",
+    m = re.match(rf"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?({QNAME})(?=\W|$)",
                  s, re.I)
     if m:
         name = m.group(2)
