@@ -85,6 +85,22 @@ Summary line: `2 no-op` (VALIDATE CONSTRAINT + SET lock_timeout).
 `gen_rollback.py --strict evals/cases/05_rollback_input.sql` exits 1 (contains
 irreversible/manual items).
 
+### Quoted-identifier rollback (M4b) — no DB, no external tools
+
+Regression for ISSUE-001 (found by /qa): quoted column / index / constraint names
+must invert, not fall through to "manual rollback required".
+
+```bash
+python3 scripts/gen_rollback.py evals/cases/07_quoted_identifiers.sql
+```
+
+PASS (verify in the output):
+- `ADD COLUMN "user id"` → `DROP COLUMN IF EXISTS "user id";`
+- `CREATE UNIQUE INDEX CONCURRENTLY "My Idx"` → `DROP INDEX CONCURRENTLY IF EXISTS "My Idx";`
+- `ADD CONSTRAINT "my chk"` → `DROP CONSTRAINT IF EXISTS "my chk";`
+- `CREATE TABLE "My Orders"` → `DROP TABLE IF EXISTS "My Orders";`
+- summary `4 reversible, 0 irreversible, 0 manual`; `gen_rollback.py --strict` exits 0.
+
 ### MySQL heuristics (M6) — no external tools
 
 ```bash
