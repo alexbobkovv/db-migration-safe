@@ -9,20 +9,6 @@ shapes documented under `references/`. A change to any of those is breaking.
 
 ## [Unreleased]
 
-### Added
-- `VERSION` file and a `--version` flag on `analyze.py`, `trace.py`, and
-  `gen_rollback.py`, so you can tell which build you have installed.
-- `CONTRIBUTING.md` and a bug-report issue template.
-
-### Fixed
-- `gen_rollback.py` treated session settings (`SET lock_timeout`, …) and transaction
-  control (`BEGIN`/`COMMIT`/…) as unrecognized statements and demanded a manual
-  rollback. They have no schema inverse and are now no-ops, so a rollback generated from
-  a normal safe migration is clean instead of carrying a false "manual rollback
-  required" line.
-- `analyze.py` now prints the squawk/eugene install commands inline when neither binary
-  is found, instead of only pointing at `references/tool-setup.md`.
-
 ## [0.1.0] - 2026-06-23
 
 Initial release.
@@ -32,13 +18,19 @@ Initial release.
   (`SKILL.md`).
 - `scripts/analyze.py` — merges `squawk` + `eugene lint` (Postgres) or InnoDB Online DDL
   heuristics (MySQL) into one verdict; exits nonzero on any error-level finding, so it
-  doubles as a CI gate.
+  doubles as a CI gate. Prints the squawk/eugene install commands inline when neither
+  binary is found.
 - `scripts/trace.py` — real-lock observation via `eugene trace` against an ephemeral or
   disposable Postgres.
 - `scripts/gen_rollback.py` — generates the reverse migration and flags irreversible or
-  manual shapes instead of guessing.
+  manual shapes instead of guessing. Handles quoted identifiers, and treats session
+  settings (`SET lock_timeout`, …) and transaction control (`BEGIN`/`COMMIT`/…) as no-ops
+  rather than demanding a manual rollback.
 - `scripts/table_size.sql` — `pg_class.reltuples` size probe.
+- `VERSION` file and a `--version` flag on `analyze.py`, `trace.py`, and
+  `gen_rollback.py`, so you can tell which build you have installed.
 - Reference catalogs and tool setup under `references/`.
+- `CONTRIBUTING.md` and a bug-report issue template.
 - Baseline eval corpus and methodology under `evals/`.
 
 [Unreleased]: https://github.com/alexbobkovv/db-migration-safe/compare/v0.1.0...HEAD
