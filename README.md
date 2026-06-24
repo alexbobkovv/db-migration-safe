@@ -1,5 +1,6 @@
 # db-migration-safe
 
+[![CI](https://github.com/alexbobkovv/db-migration-safe/actions/workflows/ci.yml/badge.svg)](https://github.com/alexbobkovv/db-migration-safe/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 ![Dependencies: stdlib only](https://img.shields.io/badge/dependencies-stdlib_only-success.svg)

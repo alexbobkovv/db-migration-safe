@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # The squawk/eugene/Postgres eval paths (M1–M3) need external binaries; the
+      # checks below are the zero-dependency evals (M4, M4b, M6) plus a compile smoke,
+      # so CI proves the scripts run without provisioning a database.
+      - name: compile smoke
+        run: python3 -m py_compile scripts/analyze.py scripts/gen_rollback.py scripts/trace.py
+
+      - name: rollback generation (M4)
+        run: python3 scripts/gen_rollback.py evals/cases/05_rollback_input.sql
+
+      - name: quoted-identifier rollback (M4b — regression for ISSUE-001)
+        run: |
+          out=$(python3 scripts/gen_rollback.py evals/cases/07_quoted_identifiers.sql)
+          echo "$out"
+          echo "$out" | grep -qF 'DROP COLUMN IF EXISTS "user id"' \
+            || { echo "FAIL: quoted identifier did not invert"; exit 1; }
+
+      - name: mysql heuristics (M6 — must flag a blocking COPY)
+        run: |
+          set +e
+          out=$(python3 scripts/analyze.py evals/cases/06_mysql_type_change.sql --dialect mysql)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -ne 0 ] || { echo "FAIL: expected nonzero exit on an error-level finding"; exit 1; }
+          echo "$out" | grep -qF 'mysql-column-type-copy' \
+            || { echo "FAIL: missing mysql-column-type-copy finding"; exit 1; }
