@@ -1,5 +1,12 @@
 # db-migration-safe
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)
+![Dependencies: stdlib only](https://img.shields.io/badge/dependencies-stdlib_only-success.svg)
+[![Postgres-first](https://img.shields.io/badge/postgres-first-336791.svg)](references/postgres-catalog.md)
+[![Verified: squawk 2.58 · eugene 0.8.3](https://img.shields.io/badge/verified-squawk_2.58_%C2%B7_eugene_0.8.3-blue.svg)](references/tool-setup.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 An open-source Claude/Agent **Skill** that makes SQL schema migrations safe. It detects
 locking and blocking hazards, rewrites unsafe DDL into zero-downtime multi-step
 migrations, auto-generates rollbacks, and gates execution behind a
