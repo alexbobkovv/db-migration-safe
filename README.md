@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/social-preview.png" alt="db-migration-safe — zero-downtime SQL schema migrations, made safe" width="820">
+</p>
+
 # db-migration-safe
 
 [![CI](https://github.com/alexbobkovv/db-migration-safe/actions/workflows/ci.yml/badge.svg)](https://github.com/alexbobkovv/db-migration-safe/actions/workflows/ci.yml)
