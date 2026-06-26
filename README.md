@@ -66,11 +66,13 @@ This fills that gap.
 | Rollback generation | up/down convention | none | generated from the DDL; flags irreversible ops |
 | Cost | paid lock rules | free | free / OSS |
 
-**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 on three
-representative migrations: with the skill, **every model produced a machine-verified
-(0-error) safe rewrite plus a generated rollback on all three** — and on the unaided
-baseline it caught what the cheaper model missed (Haiku **1/3 → 3/3** safe). Full method
-and tables in [`evals/eval.md`](evals/eval.md).
+**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 over two rounds
+— common operations, then subtle traps (FK `NOT VALID`, `UNIQUE` concurrently,
+volatile-default rewrite, direct `SET NOT NULL`): with the skill, **every model produced a
+machine-verified (0-error) safe rewrite plus a generated rollback on every task**. Unaided,
+the frontier models already write safe DDL — the skill's baseline catch is concentrated on
+the cheaper, faster model (Haiku **1/3** and **2/4** → clean). Full method and tables in
+[`evals/eval.md`](evals/eval.md).
 
 ## Install
 

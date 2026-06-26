@@ -133,38 +133,52 @@ rollback in place of unaided judgment.
 ## Cross-model results (measured 2026-06-26)
 
 Run with squawk 2.58.0 + eugene 0.8.3 across three models — Haiku 4.5, Sonnet 4.6,
-Opus 4.8 — on three representative tasks against a large `orders` table:
+Opus 4.8 — in two rounds against large `orders`/`customers` tables: common operations,
+then deliberately subtle traps. A task is scored *safe at baseline* when the unaided model
+avoids the outage pattern (full-table rewrite, unbounded `AccessExclusiveLock`, or a
+blocking index/constraint build); single-statement answers were verified through
+`analyze.py`. *With the skill*, a task passes when the model runs `analyze.py`, names the
+hazard by rule id, emits the cataloged rewrite that re-lints to **0 errors**, and generates
+a rollback.
 
-- **T1** — add a `NOT NULL` `timestamptz` column defaulting to `now()`
-- **T2** — create an index on `orders(user_id)`
-- **T3** — change `orders.total` from `integer` to `bigint`
+### Round 1 — common operations
 
-**Baseline (no skill)** — the model writes the migration from its own knowledge. Scored
-*safe* when it avoids the outage pattern (full-table rewrite, unbounded
-`AccessExclusiveLock`, or a blocking index build); single-statement answers were verified
-through `analyze.py`.
+T1 add `NOT NULL timestamptz` default `now()` · T2 create index on `orders(user_id)` ·
+T3 change `orders.total` `integer`→`bigint`
 
-| Task | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
+| | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
 |---|---|---|---|
-| T1 add NOT NULL default | ✗ unbounded lock (`eugene:E9`) | ✓ expand-contract | ✓ `lock_timeout`-bounded (`analyze` PASS) |
-| T2 create index | ✓ `CONCURRENTLY` | ✓ `CONCURRENTLY` | ✓ `CONCURRENTLY` |
-| T3 type change | ✗ table rewrite (`changing-column-type`/`E5`) | ✓ expand-contract | ✓ expand-contract |
-| **Safe** | **1 / 3** | **3 / 3** | **3 / 3** |
+| Baseline safe | **1 / 3** | 3 / 3 | 3 / 3 |
+| With skill | **3 / 3** | 3 / 3 | 3 / 3 |
 
-**With the skill** — the model runs `analyze.py`, names the hazard by rule id, emits the
-cataloged safe rewrite that re-lints to **0 errors**, and generates a rollback:
+Baseline misses (Haiku): T1 unbounded `ADD COLUMN ... DEFAULT now()` (`eugene:E9`); T3
+`ALTER COLUMN TYPE` full rewrite (`changing-column-type`/`E5`). Opus's T1 (`lock_timeout`-
+bounded single statement) `analyze`-PASSes; Sonnet/Opus otherwise wrote expand-contract.
 
-| Task | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
+### Round 2 — subtle traps
+
+C1 add FK `orders(customer_id)→customers(id)` · C2 add `UNIQUE(order_number)` · C3 add
+`NOT NULL uuid` defaulting to `gen_random_uuid()` · C4 one migration that adds a column,
+adds an FK, *and* `SET NOT NULL`s an existing column
+
+| | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
 |---|---|---|---|
-| T1 | ✓ | ✓ | ✓ |
-| T2 | ✓ | ✓ | ✓ |
-| T3 | ✓ | ✓ | ✓ |
-| **Pass** | **3 / 3** | **3 / 3** | **3 / 3** |
+| Baseline safe | **2 / 4** | 4 / 4 | 4 / 4 |
+| With skill | **4 / 4** | 4 / 4 | 4 / 4 |
+
+Baseline misses (Haiku): C3 `ADD COLUMN ... NOT NULL DEFAULT gen_random_uuid()` — a
+*volatile* default that rewrites the whole table under `AccessExclusiveLock`; C4 a direct
+`ALTER COLUMN status SET NOT NULL` that scans the table under the same lock. Haiku also
+wrote C1 as `ADD CONSTRAINT ... NOT VALID` with no follow-up `VALIDATE` — lock-safe, but
+the constraint never enforces existing rows (a correctness gap the skill's two-phase step
+closes). Sonnet and Opus handled every trap unaided — FK `NOT VALID`, `UNIQUE` via
+`CONCURRENTLY` + `USING INDEX`, the volatile-default backfill, and `SET NOT NULL` through a
+validated `CHECK`.
 
 **Reading it honestly:** the frontier models (Sonnet, Opus) already know the zero-downtime
-patterns and mostly write safe DDL unaided — so the skill's measurable lift on the
-*baseline* is concentrated on the cheaper, faster model (Haiku, **1/3 → 3/3**), which
-otherwise ships a table-rewriting `ALTER COLUMN TYPE` and an unbounded `ADD COLUMN`. What
-the skill adds for *every* model is what no baseline can: each migration is
-**machine-verified clean** by squawk + eugene and **ships with a generated rollback**.
-"Probably safe by hand" becomes "proven safe and reversible."
+patterns and write safe DDL unaided — even on the Round-2 traps. So the skill's measurable
+*baseline correction* is concentrated on the cheaper, faster model (Haiku: 1/3 and 2/4
+unaided → clean with the skill), which otherwise ships table-rewriting and table-scanning
+statements that take a large table down. What the skill adds for *every* model is what no
+baseline can: each migration is **machine-verified clean** by squawk + eugene and **ships
+with a generated rollback** — "probably safe by hand" becomes "proven safe and reversible."
