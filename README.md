@@ -12,6 +12,12 @@
 [![Verified: squawk 2.58 · eugene 0.8.3](https://img.shields.io/badge/verified-squawk_2.58_%C2%B7_eugene_0.8.3-blue.svg)](references/tool-setup.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+**Your coding agent is one `ALTER TABLE` away from a production outage.** It will happily
+write `CREATE INDEX` and run it on a 10M-row table — and lock writes for minutes.
+`db-migration-safe` is the free guardrail that lets you let an agent near your database: it
+catches the lock hazard, rewrites the migration to zero-downtime, generates the rollback,
+and **refuses to run anything risky without you** (`EXECUTE` never auto-fires).
+
 An open-source Claude/Agent **Skill** that makes SQL schema migrations safe. It detects
 locking and blocking hazards, rewrites unsafe DDL into zero-downtime multi-step
 migrations, auto-generates rollbacks, and gates execution behind a
@@ -23,6 +29,16 @@ migrations, auto-generates rollbacks, and gates execution behind a
   materially weaker, and labeled as such.
 - **Engine-agnostic** — works on hand-written `.sql` or any ORM's generated SQL.
 - **Free / Apache-2.0** — it *wraps* existing open-source linters; it does not rebuild them.
+
+## Demo
+
+<p align="center">
+  <img src="assets/demo.gif" alt="analyze.py flags an unsafe CREATE INDEX, then the CONCURRENTLY rewrite re-lints clean" width="900">
+</p>
+
+> An agent writes a bare `CREATE INDEX` on a large table; `analyze.py` flags the
+> write-blocking lock (`squawk:require-concurrent-index-creation` + `eugene:E6`/`E9`) and
+> the `CONCURRENTLY` rewrite re-lints clean. `PLAN`/`VALIDATE` touch no database.
 
 ## Why this exists
 
@@ -49,6 +65,12 @@ This fills that gap.
 | Safe rewrite | describes | warns | emits the concrete multi-step rewrite |
 | Rollback generation | up/down convention | none | generated from the DDL; flags irreversible ops |
 | Cost | paid lock rules | free | free / OSS |
+
+**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 on three
+representative migrations: with the skill, **every model produced a machine-verified
+(0-error) safe rewrite plus a generated rollback on all three** — and on the unaided
+baseline it caught what the cheaper model missed (Haiku **1/3 → 3/3** safe). Full method
+and tables in [`evals/eval.md`](evals/eval.md).
 
 ## Install
 
