@@ -1,0 +1,32 @@
+{
+  "name": "evals/cases/02_bare_create_index.sql",
+  "statements": [
+    {
+      "statement_number": 1,
+      "line_number": 5,
+      "sql": "-- Case 02 (UNSAFE): build an index without CONCURRENTLY.\n-- Hazard: blocks all writes to the table for the entire build.\n-- Expected findings: squawk require-concurrent-index-creation; eugene E6.\n-- Catalog rewrite: postgres-catalog.md #4.\nCREATE INDEX idx_orders_user_id ON orders (user_id)",
+      "triggered_rules": [
+        {
+          "id": "E6",
+          "name": "Creating a new index on an existing table",
+          "condition": "A new index was created on an existing table without the `CONCURRENTLY` keyword",
+          "effect": "This blocks all writes to the table while the index is being created",
+          "workaround": "Run `CREATE INDEX CONCURRENTLY` instead of `CREATE INDEX`",
+          "help": "Statement takes `ShareLock` on `public.orders`, blocking writes while creating index `public.idx_orders_user_id`",
+          "url": "https://kaveland.no/eugene/hints/E6/"
+        },
+        {
+          "id": "E9",
+          "name": "Taking dangerous lock without timeout",
+          "condition": "A lock that would block many common operations was taken without a timeout",
+          "effect": "This can block all other operations on the table indefinitely if any other transaction holds a conflicting lock while `idle in transaction` or `active`",
+          "workaround": "Run `SET LOCAL lock_timeout = '2s';` before the statement and retry the migration if necessary",
+          "help": "Statement takes lock on `public.orders`, but does not set a lock timeout",
+          "url": "https://kaveland.no/eugene/hints/E9/"
+        }
+      ]
+    }
+  ],
+  "passed_all_checks": false,
+  "skip_summary": false
+}

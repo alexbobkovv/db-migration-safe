@@ -9,6 +9,24 @@ shapes documented under `references/`. A change to any of those is breaking.
 
 ## [Unreleased]
 
+### Fixed
+- `scripts/trace.py` no longer contradicts itself on a migration that eugene passes: it
+  now exits `0` whenever `passed_all_checks` is true, even when a strong but acceptable
+  lock (e.g. the brief `AccessExclusiveLock` of a metadata-only `ADD COLUMN` bounded by
+  `lock_timeout`) makes `dangerous_locks_count` nonzero. Previously it printed
+  `VERDICT: PASS` and still exited `1`. The dangerous-lock count is now only used as a
+  fallback gate on older eugene builds that omit `passed_all_checks`.
+- `scripts/trace.py` prints a correct hint when `eugene trace` fails because the script
+  contains `CREATE/DROP INDEX CONCURRENTLY`: eugene runs the whole migration in one
+  transaction, which Postgres forbids for `CONCURRENTLY`, so those statements cannot be
+  traced and their safety is established by static lint instead. Previously the failure
+  surfaced only the generic "table must already exist" hint.
+
+### Added
+- Standard-library unit-test suite under `tests/` (`unittest` + `mock`, no DB or external
+  binaries) covering the parsing, inversion, severity, and exit-code logic of all three
+  scripts; runs in CI.
+
 ## [0.1.0] - 2026-06-23
 
 Initial release.

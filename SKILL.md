@@ -180,7 +180,11 @@ Apply the validated migration with locking guardrails. Dry-run first.
    WHERE id IN (SELECT id FROM t WHERE col IS NULL ORDER BY id LIMIT 5000)
    ```
 5. **Dry-run** the whole sequence against the ephemeral/clone via `scripts/trace.py`
-   one last time, confirm `passed_all_checks`, then apply to the target.
+   one last time, confirm `passed_all_checks`, then apply to the target. Note: eugene
+   traces the script in a single transaction, so `CREATE/DROP INDEX CONCURRENTLY` cannot
+   be traced (Postgres forbids it in a transaction) — trace the non-concurrent statements
+   and rely on static lint for the `CONCURRENTLY` step (it takes only a `SHARE UPDATE
+   EXCLUSIVE` lock).
 
 For MySQL, force `ALGORITHM=…, LOCK=…` so the server errors instead of silently falling
 back to a COPY rebuild, and delegate large rewrites to `gh-ost`/`pt-osc` — see

@@ -24,9 +24,16 @@ cd ~/.claude/skills/db-migration-safe
 python3 scripts/gen_rollback.py evals/cases/05_rollback_input.sql   # no external tools needed
 ```
 
-## Running the evals
+## Running the tests
 
-The eval suite is the test suite. It is described in
+Unit tests cover the scripts' parsing, inversion, severity, and exit-code logic. They are
+standard-library only (`unittest` + `mock`) and need no database or external binaries:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The eval suite is the end-to-end test suite. It is described in
 [`evals/eval.md`](evals/eval.md); each block (M1–M6) lists the exact command and the
 expected output.
 
