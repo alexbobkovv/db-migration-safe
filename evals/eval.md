@@ -59,7 +59,18 @@ PGPASS=<pw> python3 scripts/trace.py migration.sql \
 PASS (verified): a bare `CREATE INDEX` reports `ShareLock` (blocks writes) + E6/E9; an
 `ALTER COLUMN ... TYPE` reports `AccessExclusiveLock` on the table and its pkey (blocks
 everything) + E5/E9 and **E10 (real rewrite observed)**, with nonzero
-`dangerous_locks_count`. The split safe rewrites (`04*.sql`) take no dangerous locks.
+`dangerous_locks_count`.
+
+Two trace nuances confirmed against a real 3M-row table:
+
+- **The non-concurrent safe rewrites PASS** (`passed_all_checks: true`) even when a
+  metadata-only step still takes a brief `AccessExclusiveLock` — e.g. `04b` (`ADD COLUMN`
+  nullable, bounded by `lock_timeout`). eugene counts that lock in `dangerous_locks_count`
+  but still passes, so `trace.py` exits `0`. (A nonzero count alone never overrides a PASS.)
+- **`04a` (`CREATE INDEX CONCURRENTLY`) cannot be traced at all**: eugene runs the whole
+  script in one transaction and Postgres forbids `CONCURRENTLY` there (SQLSTATE 25001), so
+  `trace.py` exits `2` with that explanation. Its safety is established by static lint (M2)
+  and the known `SHARE UPDATE EXCLUSIVE` lock, not by trace.
 
 ### Rollback generation (M4) — no DB, no external tools
 

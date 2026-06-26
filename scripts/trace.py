@@ -10,8 +10,10 @@ Usage:
     python3 scripts/trace.py migration.sql --host db.staging --user app --database app
 
 Exit codes:
-    0  passed_all_checks and no dangerous locks
-    1  dangerous locks observed / checks failed
+    0  eugene's passed_all_checks is true (a strong-but-acceptable lock that only bumps
+       dangerous_locks_count does not override eugene's own PASS verdict)
+    1  passed_all_checks is false; or, on older eugene without that field, dangerous locks
+       were observed
     2  eugene not installed, file missing, or trace could not run
 """
 import argparse
@@ -112,7 +114,17 @@ def main():
         print("error: eugene trace produced no output.", file=sys.stderr)
         if proc.stderr.strip():
             print(proc.stderr, file=sys.stderr)
-        if "initdb" in proc.stderr or "pg_ctl" in proc.stderr:
+        # Postgres' own message (SQLSTATE 25001) is the reliable signal. Don't also match
+        # bare "CONCURRENTLY": eugene echoes the failing SQL to stderr, so an unrelated
+        # failure of a migration that merely contains CONCURRENTLY would get the wrong hint.
+        if "cannot run inside a transaction block" in proc.stderr:
+            print("\nhint: eugene runs the whole migration in a single transaction, so it "
+                  "cannot trace CREATE/DROP INDEX CONCURRENTLY (Postgres forbids those "
+                  "inside a transaction). Trace the non-concurrent statements separately; "
+                  "the CONCURRENTLY step takes only a SHARE UPDATE EXCLUSIVE lock (no "
+                  "read/write block) and its safety is established by static lint "
+                  "(scripts/analyze.py), not trace.", file=sys.stderr)
+        elif "initdb" in proc.stderr or "pg_ctl" in proc.stderr:
             print("\nhint: the default temp-server needs initdb/pg_ctl on PATH (install a "
                   "local Postgres), or run a throwaway Postgres in Docker and pass --host. "
                   "See the 'Ephemeral Postgres' section of references/tool-setup.md.",
@@ -135,9 +147,17 @@ def main():
     else:
         print_human(data, path)
 
-    if data.get("passed_all_checks") is False or (data.get("dangerous_locks_count") or 0) > 0:
+    # eugene's passed_all_checks is the authoritative gate (it already weighs lock mode,
+    # duration, lock_timeout, rewrites, and ignored hints). A nonzero dangerous_locks_count
+    # alone — e.g. the brief AccessExclusiveLock of a metadata-only ADD COLUMN — must NOT
+    # override a PASS, or trace would fail safe migrations and contradict its own verdict.
+    passed = data.get("passed_all_checks")
+    if passed is True:
+        return 0
+    if passed is False:
         return 1
-    return 0
+    # older eugene without passed_all_checks: fall back to the dangerous-lock count
+    return 1 if (data.get("dangerous_locks_count") or 0) > 0 else 0
 
 
 if __name__ == "__main__":
