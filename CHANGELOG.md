@@ -23,6 +23,15 @@ shapes documented under `references/`. A change to any of those is breaking.
   surfaced only the generic "table must already exist" hint.
 
 ### Added
+- Partitioned-table index handling (`references/postgres-catalog.md` #12). `CONCURRENTLY`
+  is unsupported on a partitioned parent index in **both** directions — `CREATE INDEX
+  CONCURRENTLY` and `DROP INDEX CONCURRENTLY` each error at runtime — and static linters
+  cannot see partitioning, so they pass the very forms that fail (squawk even *recommends*
+  the erroring `CONCURRENTLY` drop). Adds the per-partition `CONCURRENTLY` → `CREATE INDEX
+  ON ONLY` → `ATTACH` build, the bounded non-concurrent drop, and `scripts/is_partitioned.sql`
+  to detect a partitioned parent during PLAN. New eval cases `08_partitioned_index_*` and
+  `09_partitioned_drop_index_*`, verified on PostgreSQL 16; cross-model results in
+  `evals/eval.md` (Round 3 — the one place the skill corrects a frontier model, not just Haiku).
 - Standard-library unit-test suite under `tests/` (`unittest` + `mock`, no DB or external
   binaries) covering the parsing, inversion, severity, and exit-code logic of all three
   scripts; runs in CI.

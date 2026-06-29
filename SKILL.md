@@ -79,7 +79,14 @@ Read the merged verdict:
    ```bash
    psql "$DATABASE_URL" -v tablename=public.orders -f scripts/table_size.sql
    ```
-4. **Escalate to trace** when the verdict involves a possible table/index rewrite (E5,
+4. **Probe for partitioning** before indexing or constraining a table. Static linters
+   cannot see that a table is a partitioned parent, where `CREATE INDEX CONCURRENTLY`
+   **errors** and a plain `CREATE INDEX` blocks writes across every partition (see
+   `references/postgres-catalog.md` #12). They silently pass both:
+   ```bash
+   psql "$DATABASE_URL" -v tablename=public.events -f scripts/is_partitioned.sql
+   ```
+5. **Escalate to trace** when the verdict involves a possible table/index rewrite (E5,
    E10), an FK without a covering index (E15), or any lock whose real duration depends on
    row count. `trace` observes the *actual* lock mode and how long it is held:
    ```bash
@@ -97,7 +104,7 @@ Then produce three artifacts for the user:
 ## Safe rewrites
 
 For every error/warning finding, replace the unsafe statement with the cataloged
-zero-downtime rewrite. The full table of 11 operations → rewrites is in
+zero-downtime rewrite. The full table of 12 operations → rewrites is in
 `references/postgres-catalog.md` (MySQL: `references/mysql-catalog.md`). The two Postgres
 primitives behind almost every rewrite:
 
@@ -120,6 +127,8 @@ Quick reference (see catalog for the exact multi-step SQL and PG-version nuances
 | `ALTER COLUMN ... TYPE` | expand-contract (new col → dual-write → backfill → swap → drop) |
 | rename column/table | expand-contract, or compatibility `VIEW` |
 | backfill `UPDATE` | bounded batches in short txns, throttled |
+| `CREATE INDEX` on a **partitioned** table | per-partition `CONCURRENTLY` → `CREATE INDEX ON ONLY` parent → `ATTACH PARTITION` |
+| `DROP INDEX` on a **partitioned** table | bounded non-concurrent `DROP INDEX` on the parent (`CONCURRENTLY` is unavailable; children can't be dropped alone) |
 
 Write the rewritten statements to a new file (e.g. `migration.safe.sql`) so it can be
 re-validated.
@@ -194,7 +203,7 @@ back to a COPY rebuild, and delegate large rewrites to `gh-ost`/`pt-osc` — see
 
 ## Reference index
 
-- `references/postgres-catalog.md` — the 11 unsafe ops → safe rewrites (core knowledge).
+- `references/postgres-catalog.md` — the 12 unsafe ops → safe rewrites (core knowledge).
 - `references/mysql-catalog.md` — InnoDB Online DDL matrix + OSC delegation (weaker path).
 - `references/squawk-rules.md` — squawk rule ids and what each catches.
 - `references/eugene-hints.md` — eugene E1–E15 / W12–W14 and their workarounds.
@@ -208,5 +217,6 @@ back to a COPY rebuild, and delegate large rewrites to `gh-ost`/`pt-osc` — see
   report.
 - `scripts/gen_rollback.py` — generates the reverse migration; flags irreversible ops.
 - `scripts/table_size.sql` — `pg_class.reltuples` size probe.
+- `scripts/is_partitioned.sql` — detects a partitioned parent + lists partitions (catalog #12).
 
 All scripts are Python 3 standard library only — no `pip install`.

@@ -66,13 +66,17 @@ This fills that gap.
 | Rollback generation | up/down convention | none | generated from the DDL; flags irreversible ops |
 | Cost | paid lock rules | free | free / OSS |
 
-**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 over two rounds
+**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 over three rounds
 — common operations, then subtle traps (FK `NOT VALID`, `UNIQUE` concurrently,
-volatile-default rewrite, direct `SET NOT NULL`): with the skill, **every model produced a
-machine-verified (0-error) safe rewrite plus a generated rollback on every task**. Unaided,
-the frontier models already write safe DDL — the skill's baseline catch is concentrated on
-the cheaper, faster model (Haiku **1/3** and **2/4** → clean). Full method and tables in
-[`evals/eval.md`](evals/eval.md).
+volatile-default rewrite, direct `SET NOT NULL`), then **partitioned indexes**: with the
+skill, **every model produced a machine-verified (0-error) safe rewrite plus a generated
+rollback on every task**. Unaided, the frontier models already write safe DDL on the first two
+rounds — the skill's baseline catch there is concentrated on the cheaper, faster model (Haiku
+**1/3** and **2/4** → clean). Round 3 is the exception that reaches a *frontier* model:
+`CREATE`/`DROP INDEX CONCURRENTLY` is silently unsupported on a partitioned parent, so Sonnet
+(and Haiku) reach for it and fail at deploy while static linters wave it through — only Opus
+gets it right unaided, and the skill's `is_partitioned.sql` probe + catalog #12 lift Sonnet
+and Haiku to safe. Full method and tables in [`evals/eval.md`](evals/eval.md).
 
 ## Install
 
@@ -170,7 +174,7 @@ behavior is a minor bump; fixes are patches.
 ```
 SKILL.md            entry point (workflow + safety contract)
 references/         postgres-catalog · mysql-catalog · squawk-rules · eugene-hints · tool-setup
-scripts/           analyze.py · trace.py · gen_rollback.py · table_size.sql  (stdlib only)
+scripts/           analyze.py · trace.py · gen_rollback.py · table_size.sql · is_partitioned.sql  (stdlib only)
 evals/             baseline cases + methodology
 CHANGELOG.md        what changed per version
 CONTRIBUTING.md     dev setup · eval workflow · invariants
