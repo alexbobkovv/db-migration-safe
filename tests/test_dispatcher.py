@@ -40,7 +40,8 @@ class Dispatcher(unittest.TestCase):
         self.assertIn("unknown subcommand", err)
 
     def test_version(self):
-        version = open(os.path.join(REPO, "VERSION")).read().strip()
+        with open(os.path.join(REPO, "VERSION")) as f:
+            version = f.read().strip()
         rc, out, _ = run("--version")
         self.assertEqual(rc, 0)
         self.assertIn(version, out)

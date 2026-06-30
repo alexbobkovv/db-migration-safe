@@ -51,7 +51,8 @@ class Cli(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_version_matches_file(self):
-        version = open(os.path.join(REPO, "VERSION")).read().strip()
+        with open(os.path.join(REPO, "VERSION")) as f:
+            version = f.read().strip()
         rc, out, _ = run("--version")
         self.assertIn(version, out)
 

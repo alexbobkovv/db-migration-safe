@@ -9,6 +9,8 @@ shapes documented under `references/`. A change to any of those is breaking.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-30
+
 ### Added
 - **GitHub Action** (`action.yml`) — drop-in `uses: alexbobkovv/db-migration-safe@v1` that
   analyzes the `.sql` files changed in a PR, uploads **SARIF** so findings annotate the diff
@@ -39,6 +41,18 @@ shapes documented under `references/`. A change to any of those is breaking.
   `analyze` / `trace` / `rollback` so CI, pre-commit, the Claude skill, and a future MCP
   server share a single command surface. Pure routing; each subcommand keeps its own flags
   and exit codes. Covered by `tests/test_dispatcher.py`.
+- Partitioned-table index handling (`references/postgres-catalog.md` #12). `CONCURRENTLY`
+  is unsupported on a partitioned parent index in **both** directions — `CREATE INDEX
+  CONCURRENTLY` and `DROP INDEX CONCURRENTLY` each error at runtime — and static linters
+  cannot see partitioning, so they pass the very forms that fail (squawk even *recommends*
+  the erroring `CONCURRENTLY` drop). Adds the per-partition `CONCURRENTLY` → `CREATE INDEX
+  ON ONLY` → `ATTACH` build, the bounded non-concurrent drop, and `scripts/is_partitioned.sql`
+  to detect a partitioned parent during PLAN. New eval cases `08_partitioned_index_*` and
+  `09_partitioned_drop_index_*`, verified on PostgreSQL 16; cross-model results in
+  `evals/eval.md` (Round 3 — the one place the skill corrects a frontier model, not just Haiku).
+- Standard-library unit-test suite under `tests/` (`unittest` + `mock`, no DB or external
+  binaries) covering the parsing, inversion, severity, and exit-code logic of all three
+  scripts; runs in CI.
 
 ### Fixed
 - `scripts/trace.py` no longer contradicts itself on a migration that eugene passes: it
@@ -52,20 +66,6 @@ shapes documented under `references/`. A change to any of those is breaking.
   transaction, which Postgres forbids for `CONCURRENTLY`, so those statements cannot be
   traced and their safety is established by static lint instead. Previously the failure
   surfaced only the generic "table must already exist" hint.
-
-### Added
-- Partitioned-table index handling (`references/postgres-catalog.md` #12). `CONCURRENTLY`
-  is unsupported on a partitioned parent index in **both** directions — `CREATE INDEX
-  CONCURRENTLY` and `DROP INDEX CONCURRENTLY` each error at runtime — and static linters
-  cannot see partitioning, so they pass the very forms that fail (squawk even *recommends*
-  the erroring `CONCURRENTLY` drop). Adds the per-partition `CONCURRENTLY` → `CREATE INDEX
-  ON ONLY` → `ATTACH` build, the bounded non-concurrent drop, and `scripts/is_partitioned.sql`
-  to detect a partitioned parent during PLAN. New eval cases `08_partitioned_index_*` and
-  `09_partitioned_drop_index_*`, verified on PostgreSQL 16; cross-model results in
-  `evals/eval.md` (Round 3 — the one place the skill corrects a frontier model, not just Haiku).
-- Standard-library unit-test suite under `tests/` (`unittest` + `mock`, no DB or external
-  binaries) covering the parsing, inversion, severity, and exit-code logic of all three
-  scripts; runs in CI.
 
 ## [0.1.0] - 2026-06-23
 
@@ -91,5 +91,6 @@ Initial release.
 - `CONTRIBUTING.md` and a bug-report issue template.
 - Baseline eval corpus and methodology under `evals/`.
 
-[Unreleased]: https://github.com/alexbobkovv/db-migration-safe/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/alexbobkovv/db-migration-safe/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/alexbobkovv/db-migration-safe/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/alexbobkovv/db-migration-safe/releases/tag/v0.1.0
