@@ -1,0 +1,6 @@
+-   id: db-migration-safe
+    name: db-migration-safe
+    description: Flag lock/blocking hazards in changed SQL migrations (Postgres by default; runs install-free via the stdlib heuristic, or uses squawk/eugene when on PATH).
+    entry: scripts/migrate_safe.py analyze
+    language: script
+    types: [sql]

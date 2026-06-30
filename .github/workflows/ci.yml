@@ -14,13 +14,37 @@ jobs:
         with:
           python-version: "3.x"
       # The squawk/eugene/Postgres eval paths (M1–M3) need external binaries; the
-      # checks below are the zero-dependency evals (M4, M4b, M6) plus a compile smoke,
+      # checks below are the zero-dependency evals (M1b, M4, M4b, M6) plus a compile smoke,
       # so CI proves the scripts run without provisioning a database.
       - name: compile smoke
-        run: python3 -m py_compile scripts/analyze.py scripts/gen_rollback.py scripts/trace.py
+        run: python3 -m py_compile scripts/migrate_safe.py scripts/analyze.py scripts/gen_rollback.py scripts/trace.py
 
       - name: unit tests
         run: python3 -m unittest discover -s tests -v
+
+      - name: validate action.yml + pre-commit manifest
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import yaml
+          a = yaml.safe_load(open("action.yml"))
+          assert a["runs"]["using"] == "composite", "action must be composite"
+          assert a["inputs"] and a["runs"]["steps"], "action missing inputs/steps"
+          h = yaml.safe_load(open(".pre-commit-hooks.yaml"))
+          assert h[0]["id"] == "db-migration-safe" and h[0]["language"] == "script"
+          print("action.yml + .pre-commit-hooks.yaml OK")
+          PY
+
+      - name: install-free fallback (M1b — must gate with no squawk/eugene)
+        run: |
+          set +e
+          out=$(python3 scripts/migrate_safe.py analyze evals/cases/02_bare_create_index.sql --no-external)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -ne 0 ] || { echo "FAIL: expected nonzero exit from the heuristic gate"; exit 1; }
+          echo "$out" | grep -qF 'pg-create-index-not-concurrent' \
+            || { echo "FAIL: missing heuristic finding"; exit 1; }
 
       - name: rollback generation (M4)
         run: python3 scripts/gen_rollback.py evals/cases/05_rollback_input.sql

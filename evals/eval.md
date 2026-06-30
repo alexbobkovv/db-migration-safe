@@ -27,6 +27,26 @@ eugene 0.8.3 — e.g. case 02 reports `squawk:require-concurrent-index-creation`
 (synthetic `tool-error`) — it never silent-passes. If the binaries are absent,
 `analyze.py` exits 2 with install guidance — install per `references/tool-setup.md` first.
 
+### Install-free fallback (M1b) — no squawk, no eugene, no DB
+
+When neither linter is installed (or with `--no-external`), the Postgres path degrades to a
+stdlib heuristic over the cataloged ops so PLAN and the CI gate still work with zero install.
+It is banner-flagged non-authoritative — it cannot see table size, partitioning, or a
+cross-file validated CHECK — and it never silently replaces the real linters: whenever squawk
+or eugene is present, `analyze.py` defers to them (`heuristic_fallback: false`).
+
+```bash
+python3 scripts/analyze.py evals/cases/02_bare_create_index.sql --no-external          # exit 1
+python3 scripts/analyze.py evals/cases/01_add_column_not_null_default.sql --no-external # exit 1
+python3 scripts/analyze.py evals/cases/04b_add_column_nullable.sql --no-external        # exit 0
+```
+
+PASS: the unsafe cases exit **1** with a `HEURISTIC MODE` banner and a `heuristic-pg:*` rule
+(`pg-create-index-not-concurrent`, `pg-add-column-volatile-default`, `pg-column-type-change`,
+`pg-set-not-null`, `pg-add-fk-not-valid`, `pg-add-check-not-valid`, `pg-add-unique-constraint`);
+a plain nullable `ADD COLUMN` exits **0**. With the binaries on PATH and no `--no-external`,
+the same files report `heuristic_fallback: false` and the squawk/eugene findings instead.
+
 ### Safe rewrite re-lints clean (M2)
 
 The safe rewrites are split one-dangerous-op-per-file (see `references/postgres-catalog.md`,

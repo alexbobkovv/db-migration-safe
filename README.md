@@ -86,7 +86,10 @@ This is a Claude Code skill. Drop it where your skills live:
 git clone https://github.com/alexbobkovv/db-migration-safe ~/.claude/skills/db-migration-safe
 ```
 
-Then install the binaries it shells out to (only what you need) — see
+It works **install-free**: with no binaries present (or `analyze.py --no-external`), the
+Postgres path falls back to a stdlib heuristic over the cataloged ops so `PLAN`/CI still
+flag obviously-unsafe DDL — clearly labeled non-authoritative. Install the binaries it
+shells out to for authoritative analysis and the `VALIDATE` gate (only what you need) — see
 [`references/tool-setup.md`](references/tool-setup.md):
 
 ```bash
@@ -131,24 +134,57 @@ it runs only when you explicitly ask to apply the migration (see the Safety cont
 
 ## CI gate
 
-`analyze.py` exits nonzero on any error-level finding, so it drops straight into CI:
+`analyze.py` exits nonzero on any error-level finding, so it drops straight into CI. The
+easiest path is the bundled **GitHub Action** — it analyzes the migrations changed in a PR
+and uploads SARIF so findings annotate the diff inline (and land in the Security tab):
 
 ```yaml
 # .github/workflows/migrations.yml
 name: migration-safety
 on: pull_request
+permissions:
+  contents: read
+  security-events: write          # required to upload SARIF to code scanning
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm install -g squawk-cli
-      - run: mise use ubi:kaaveland/eugene@latest
+        with:
+          fetch-depth: 0            # so the Action can diff against the PR base
+      - uses: alexbobkovv/db-migration-safe@v1
+        with:
+          dialect: postgres         # or mysql
+          # files: db/migrate/*.sql # optional: override the changed-files default
+```
+
+It installs `squawk` for authoritative analysis and **falls back to the stdlib heuristic if
+that install fails**, so the gate never silently no-ops. Prefer to wire it by hand? The
+scripts are a plain CLI:
+
+```yaml
+      - run: pip install squawk-cli      # optional; heuristic fallback works without it
       - run: |
           for f in $(git diff --name-only origin/${{ github.base_ref }}... -- '*.sql'); do
-            python3 scripts/analyze.py "$f" --dialect postgres || exit 1
+            python3 scripts/migrate_safe.py analyze "$f" --dialect postgres || exit 1
           done
 ```
+
+## pre-commit hook
+
+Block unsafe DDL before it's even committed. Add to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/alexbobkovv/db-migration-safe
+    rev: v0.1.0
+    hooks:
+      - id: db-migration-safe          # runs on changed *.sql; postgres by default
+        # args: [--dialect, mysql]
+```
+
+It runs install-free via the heuristic, and uses `squawk`/`eugene` automatically when they
+are on your PATH.
 
 ## Versioning & upgrading
 
@@ -174,7 +210,7 @@ behavior is a minor bump; fixes are patches.
 ```
 SKILL.md            entry point (workflow + safety contract)
 references/         postgres-catalog · mysql-catalog · squawk-rules · eugene-hints · tool-setup
-scripts/           analyze.py · trace.py · gen_rollback.py · table_size.sql · is_partitioned.sql  (stdlib only)
+scripts/           migrate_safe.py (dispatcher) · analyze.py · trace.py · gen_rollback.py · table_size.sql · is_partitioned.sql  (stdlib only)
 evals/             baseline cases + methodology
 CHANGELOG.md        what changed per version
 CONTRIBUTING.md     dev setup · eval workflow · invariants

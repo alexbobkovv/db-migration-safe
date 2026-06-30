@@ -67,6 +67,12 @@ exits **nonzero if any error-level finding** is present (so it doubles as a CI g
 For `--dialect mysql` it applies the built-in InnoDB Online DDL heuristics instead (no
 free static MySQL lock-linter exists; see `references/mysql-catalog.md`).
 
+If neither binary is installed (or you pass `--no-external`), the Postgres path falls back
+to a stdlib heuristic over the cataloged ops so PLAN still flags obviously-unsafe DDL with
+zero install. It is banner-flagged `HEURISTIC MODE` / `heuristic_fallback: true` and is
+**non-authoritative** — it cannot see table size, partitioning, or a cross-file validated
+CHECK — so install squawk/eugene before relying on the VALIDATE gate.
+
 Read the merged verdict:
 
 1. **Findings** — each has a `source` (`squawk`/`eugene`/`heuristic`), a rule id, a
@@ -211,8 +217,12 @@ back to a COPY rebuild, and delegate large rewrites to `gh-ost`/`pt-osc` — see
 
 ## Scripts
 
+- `scripts/migrate_safe.py` — one dispatcher over `analyze` / `trace` / `rollback`
+  (`migrate-safe analyze … | trace … | rollback …`); the shared entry for CI, pre-commit,
+  and this skill. Each subcommand keeps its own flags and exit codes.
 - `scripts/analyze.py` — orchestrates squawk + eugene lint (or MySQL heuristics) → one
-  verdict. Exits nonzero on error-level findings.
+  verdict; stdlib heuristic fallback when no binaries are installed. Exits nonzero on
+  error-level findings.
 - `scripts/trace.py` — runs `eugene trace` (ephemeral temp server or clone) → real lock
   report.
 - `scripts/gen_rollback.py` — generates the reverse migration; flags irreversible ops.
