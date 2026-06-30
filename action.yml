@@ -1,0 +1,97 @@
+name: "db-migration-safe"
+description: "Catch lock/blocking hazards in SQL schema migrations and annotate the PR (SARIF)."
+author: "alexbobkovv"
+branding:
+  icon: "database"
+  color: "blue"
+
+inputs:
+  files:
+    description: "Newline/space-separated .sql paths. Default: files changed vs the PR base (checkout with fetch-depth: 0), or all tracked *.sql when not a PR."
+    required: false
+    default: ""
+  dialect:
+    description: "postgres | mysql"
+    required: false
+    default: "postgres"
+  pg-version:
+    description: "Gate Postgres version-specific rules, e.g. 13.0"
+    required: false
+    default: ""
+  install-linters:
+    description: "pip install squawk-cli for authoritative analysis. If false (or the install fails), the stdlib heuristic fallback is used."
+    required: false
+    default: "true"
+  upload-sarif:
+    description: "Upload findings to GitHub code scanning (requires permissions: security-events: write)."
+    required: false
+    default: "true"
+  fail-on-error:
+    description: "Fail the job when any error-level finding is present."
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+
+    - name: Install squawk (best effort; heuristic fallback otherwise)
+      if: ${{ inputs.install-linters == 'true' }}
+      shell: bash
+      run: pip install --quiet squawk-cli || echo "::warning title=db-migration-safe::squawk install failed; using the stdlib heuristic fallback (install eugene/squawk for authoritative analysis)"
+
+    - name: Analyze migrations
+      id: analyze
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_FILES: ${{ inputs.files }}
+        DIALECT: ${{ inputs.dialect }}
+        PG_VERSION: ${{ inputs.pg-version }}
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -uo pipefail
+        if [ -n "${INPUT_FILES}" ]; then
+          files="${INPUT_FILES}"
+        elif [ -n "${BASE_REF}" ]; then
+          git fetch --no-tags --depth=1 origin "${BASE_REF}" >/dev/null 2>&1 || true
+          files="$(git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.sql' 2>/dev/null || true)"
+        else
+          files="$(git ls-files '*.sql' 2>/dev/null || true)"
+        fi
+        existing=()
+        for f in ${files}; do [ -f "${f}" ] && existing+=("${f}"); done
+        if [ ${#existing[@]} -eq 0 ]; then
+          echo "db-migration-safe: no .sql files to analyze."
+          { echo "sarif="; echo "fail=0"; } >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        echo "db-migration-safe: analyzing ${existing[*]}"
+        pgflag=()
+        [ -n "${PG_VERSION}" ] && pgflag=(--pg-version "${PG_VERSION}")
+        sarif="$(mktemp -d)/results.sarif"
+        # Human-readable log first (visible even where code scanning is unavailable):
+        python3 "${ACTION_PATH}/scripts/migrate_safe.py" analyze "${existing[@]}" \
+          --dialect "${DIALECT}" "${pgflag[@]}" || true
+        # SARIF for upload; its exit code is the gate (0 pass / 1 error-level findings):
+        python3 "${ACTION_PATH}/scripts/migrate_safe.py" analyze "${existing[@]}" \
+          --dialect "${DIALECT}" "${pgflag[@]}" --sarif > "${sarif}"
+        rc=$?
+        { echo "sarif=${sarif}"; echo "fail=$([ ${rc} -ne 0 ] && echo 1 || echo 0)"; } >> "${GITHUB_OUTPUT}"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.analyze.outputs.sarif }}
+        category: db-migration-safe
+
+    - name: Gate on error-level findings
+      if: ${{ inputs.fail-on-error == 'true' && steps.analyze.outputs.fail == '1' }}
+      shell: bash
+      run: |
+        echo "::error title=db-migration-safe::error-level migration hazards found — see the annotations / code scanning alerts above."
+        exit 1

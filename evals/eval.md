@@ -27,6 +27,26 @@ eugene 0.8.3 — e.g. case 02 reports `squawk:require-concurrent-index-creation`
 (synthetic `tool-error`) — it never silent-passes. If the binaries are absent,
 `analyze.py` exits 2 with install guidance — install per `references/tool-setup.md` first.
 
+### Install-free fallback (M1b) — no squawk, no eugene, no DB
+
+When neither linter is installed (or with `--no-external`), the Postgres path degrades to a
+stdlib heuristic over the cataloged ops so PLAN and the CI gate still work with zero install.
+It is banner-flagged non-authoritative — it cannot see table size, partitioning, or a
+cross-file validated CHECK — and it never silently replaces the real linters: whenever squawk
+or eugene is present, `analyze.py` defers to them (`heuristic_fallback: false`).
+
+```bash
+python3 scripts/analyze.py evals/cases/02_bare_create_index.sql --no-external          # exit 1
+python3 scripts/analyze.py evals/cases/01_add_column_not_null_default.sql --no-external # exit 1
+python3 scripts/analyze.py evals/cases/04b_add_column_nullable.sql --no-external        # exit 0
+```
+
+PASS: the unsafe cases exit **1** with a `HEURISTIC MODE` banner and a `heuristic-pg:*` rule
+(`pg-create-index-not-concurrent`, `pg-add-column-volatile-default`, `pg-column-type-change`,
+`pg-set-not-null`, `pg-add-fk-not-valid`, `pg-add-check-not-valid`, `pg-add-unique-constraint`);
+a plain nullable `ADD COLUMN` exits **0**. With the binaries on PATH and no `--no-external`,
+the same files report `heuristic_fallback: false` and the squawk/eugene findings instead.
+
 ### Safe rewrite re-lints clean (M2)
 
 The safe rewrites are split one-dangerous-op-per-file (see `references/postgres-catalog.md`,
@@ -121,10 +141,158 @@ python3 scripts/analyze.py evals/cases/06_mysql_type_change.sql --dialect mysql
 PASS = exit nonzero; findings include `mysql-column-type-copy` (error),
 `mysql-add-foreign-key` (warning), `mysql-pin-algorithm-lock` (warning).
 
+### Partitioned-table index (M7) — needs Postgres; static lint is INSUFFICIENT here
+
+`CREATE INDEX CONCURRENTLY` on a partitioned *parent* errors at runtime; a plain
+`CREATE INDEX` on the parent blocks writes across every partition. Static linters cannot see
+that a table is partitioned, so squawk **and** eugene PASS the unsafe form — the catch is the
+`is_partitioned.sql` probe (PLAN) or a clone dry-run, not static lint.
+
+```bash
+# static lint PASSES the unsafe form (that is the point of this case):
+python3 scripts/analyze.py evals/cases/08_partitioned_index_unsafe.sql --dialect postgres   # exits 0
+# the deterministic catch the skill adds:
+psql "$DATABASE_URL" -v tablename=public.events -f scripts/is_partitioned.sql               # is_partitioned_parent = t
+# the safe rewrite re-lints clean and applies online:
+python3 scripts/analyze.py evals/cases/08_partitioned_index_safe.sql --dialect postgres      # exits 0
+```
+
+PASS (verified on PG 16): the unsafe form errors (`cannot create index on partitioned table
+"events" concurrently`); `is_partitioned.sql` reports the parent + its partitions; the safe
+per-partition rewrite applies cleanly and leaves the parent index `indisvalid = true`. The
+safe file suppresses two false positives on the `ON ONLY` parent line
+(`-- eugene: ignore E6`, `-- squawk-ignore require-concurrent-index-creation`) that fire only
+because the linters cannot see it is a metadata-only parent index — the same blind spot that
+lets the unsafe form slip through.
+
+### Partitioned-table DROP INDEX (M8) — needs Postgres; static lint MISLEADS here
+
+Dropping an index from a partitioned table has **no** concurrent form: `DROP INDEX
+CONCURRENTLY` on the parent errors, and a child index cannot be dropped on its own (it is
+owned by the parent). Static lint not only passes the erroring `CONCURRENTLY` form — squawk's
+`require-concurrent-index-deletion` rule actively *recommends* `CONCURRENTLY`, the exact form
+that fails. The catch is again `is_partitioned.sql` (PLAN), not static lint.
+
+```bash
+# static lint PASSES the unsafe CONCURRENTLY form (that is the point of this case):
+python3 scripts/analyze.py evals/cases/09_partitioned_drop_index_unsafe.sql --dialect postgres   # exits 0
+# the safe rewrite re-lints clean (after suppressing the misleading squawk rule) and applies:
+python3 scripts/analyze.py evals/cases/09_partitioned_drop_index_safe.sql --dialect postgres       # exits 0
+```
+
+PASS (verified on PG 16): the unsafe form errors (`cannot drop partitioned index
+"idx_events_user_id" concurrently`); the tempting per-child workaround `DROP INDEX
+CONCURRENTLY <child>` also errors (`... because index idx_events_user_id requires it`); the
+safe bounded, non-concurrent `DROP INDEX` on the parent lints clean and removes every index
+row. Because a `DROP INDEX` is metadata-only, the parent's brief `AccessExclusiveLock` —
+bounded by `lock_timeout` — is the correct trade, and the only one available.
+
 ## Scoring
 
 A case passes when, with the skill, the model (a) runs `analyze.py`, (b) reports the
 hazard in plain language tied to the rule id, (c) emits the cataloged safe rewrite that
 re-lints clean, and (d) generates a reviewed rollback. Track pass rate per model; the
-skill should lift every model from "writes the unsafe DDL" to "produces the safe,
-reversible migration."
+skill should lift weaker models from "writes the unsafe DDL" to "produces the safe,
+reversible migration," and give *every* model machine-verification and a generated
+rollback in place of unaided judgment.
+
+## Cross-model results (measured 2026-06-26)
+
+Run with squawk 2.58.0 + eugene 0.8.3 across three models — Haiku 4.5, Sonnet 4.6,
+Opus 4.8 — in two rounds against large `orders`/`customers` tables: common operations,
+then deliberately subtle traps. A task is scored *safe at baseline* when the unaided model
+avoids the outage pattern (full-table rewrite, unbounded `AccessExclusiveLock`, or a
+blocking index/constraint build); single-statement answers were verified through
+`analyze.py`. *With the skill*, a task passes when the model runs `analyze.py`, names the
+hazard by rule id, emits the cataloged rewrite that re-lints to **0 errors**, and generates
+a rollback.
+
+### Round 1 — common operations
+
+T1 add `NOT NULL timestamptz` default `now()` · T2 create index on `orders(user_id)` ·
+T3 change `orders.total` `integer`→`bigint`
+
+| | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
+|---|---|---|---|
+| Baseline safe | **1 / 3** | 3 / 3 | 3 / 3 |
+| With skill | **3 / 3** | 3 / 3 | 3 / 3 |
+
+Baseline misses (Haiku): T1 unbounded `ADD COLUMN ... DEFAULT now()` (`eugene:E9`); T3
+`ALTER COLUMN TYPE` full rewrite (`changing-column-type`/`E5`). Opus's T1 (`lock_timeout`-
+bounded single statement) `analyze`-PASSes; Sonnet/Opus otherwise wrote expand-contract.
+
+### Round 2 — subtle traps
+
+C1 add FK `orders(customer_id)→customers(id)` · C2 add `UNIQUE(order_number)` · C3 add
+`NOT NULL uuid` defaulting to `gen_random_uuid()` · C4 one migration that adds a column,
+adds an FK, *and* `SET NOT NULL`s an existing column
+
+| | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
+|---|---|---|---|
+| Baseline safe | **2 / 4** | 4 / 4 | 4 / 4 |
+| With skill | **4 / 4** | 4 / 4 | 4 / 4 |
+
+Baseline misses (Haiku): C3 `ADD COLUMN ... NOT NULL DEFAULT gen_random_uuid()` — a
+*volatile* default that rewrites the whole table under `AccessExclusiveLock`; C4 a direct
+`ALTER COLUMN status SET NOT NULL` that scans the table under the same lock. Haiku also
+wrote C1 as `ADD CONSTRAINT ... NOT VALID` with no follow-up `VALIDATE` — lock-safe, but
+the constraint never enforces existing rows (a correctness gap the skill's two-phase step
+closes). Sonnet and Opus handled every trap unaided — FK `NOT VALID`, `UNIQUE` via
+`CONCURRENTLY` + `USING INDEX`, the volatile-default backfill, and `SET NOT NULL` through a
+validated `CHECK`.
+
+### Round 3 — partitioned indexes (a frontier-model gap)
+
+Both tasks operate on `events`, a RANGE-partitioned parent (~800M rows across monthly
+partitions) under constant load. `CONCURRENTLY` — the reflexive zero-downtime answer for a
+single table — is **rejected by Postgres on a partitioned parent index**, in both directions:
+
+- **P1 — build:** add a btree index on `events(user_id)`. The "obvious" `CREATE INDEX
+  CONCURRENTLY ON events (user_id)` errors (`cannot create index ... concurrently`).
+- **P2 — drop:** drop the unused `idx_events_user_id`. The "obvious" `DROP INDEX
+  CONCURRENTLY idx_events_user_id` errors (`cannot drop partitioned index ... concurrently`),
+  and the tempting per-child workaround `DROP INDEX CONCURRENTLY <child>` errors too — child
+  indexes are owned by the parent and cannot be dropped on their own.
+
+| (P1 build · P2 drop) | Haiku 4.5 | Sonnet 4.6 | Opus 4.8 |
+|---|---|---|---|
+| Baseline safe | **0 / 2** | **0 / 2** | 2 / 2 |
+| With skill | **2 / 2** | **2 / 2** | 2 / 2 |
+
+Baseline misses, P1: Haiku and Sonnet both wrote `CREATE INDEX CONCURRENTLY ON events
+(user_id)` and *confidently asserted* it "cascades to all partitions automatically" — a
+hallucinated feature, verified failing on PG 16 across two Sonnet runs. P2: Haiku wrote the
+single erroring `DROP INDEX CONCURRENTLY` (again claiming it "cascades to all partition
+indexes automatically"); Sonnet *did* know `CONCURRENTLY` is rejected on the parent but then
+hallucinated a per-child `DROP INDEX CONCURRENTLY <child>` sequence — which Postgres also
+forbids, so its migration still fails at the first statement. Opus got **both** right unaided,
+both runs: the per-partition `CONCURRENTLY` → `CREATE INDEX ON ONLY` → `ATTACH` build for P1,
+and the bounded non-concurrent `DROP INDEX` on the parent for P2 (explicitly ruling out the
+parent-`CONCURRENTLY` and per-child paths). With catalog #12 in context, Sonnet produced the
+correct sequence for both (verified on PG 16: parent index `indisvalid = true` after P1; no
+index rows remain after P2).
+
+This is the one place the skill measurably corrects a *frontier* model, because the hazard
+combines two things the others don't: a feature-restriction blind spot **and** a static-lint
+blind spot. squawk/eugene cannot see partitioning, so they pass the erroring `CONCURRENTLY`
+forms — and for the drop, squawk's `require-concurrent-index-deletion` rule actively
+*recommends* the form that fails. Only the `is_partitioned.sql` probe (PLAN) catches it.
+
+The gap is specific to *indexes*. Probing adjacent partitioned-table operations, baseline
+Sonnet handled them unaided and was **not** fooled: adding a `UNIQUE`/`PK` on a non-partition
+-key column (it correctly called the native constraint impossible and proposed a shadow-table
++ trigger), `DETACH PARTITION` (correct `DETACH ... CONCURRENTLY`, outside a txn), and
+attaching a populated table (correct pre-validated matching `CHECK` so `ATTACH` skips the
+scan). The common thread of the two it *fails* is a reflexive `CONCURRENTLY` on a partitioned
+index — the one spot where the familiar single-table primitive is silently unavailable.
+
+**Reading it honestly:** the frontier models (Sonnet, Opus) already know the zero-downtime
+patterns and write safe DDL unaided on Rounds 1–2 and on most of Round 3's neighborhood. The
+one measured exception is the partitioned-*index* pair above, where Sonnet (and Haiku)
+reach for an unsupported `CONCURRENTLY` form and only Opus gets it right unaided. So the
+skill's measurable *baseline correction* is concentrated on the cheaper, faster model (Haiku:
+1/3 and 2/4 unaided → clean with the skill) plus this frontier-model gap for Sonnet — all
+cases where the model otherwise ships statements that take a large table down or fail at
+deploy. What the skill adds for *every* model is what no baseline can: each migration is
+**machine-verified clean** by squawk + eugene and **ships with a generated rollback** —
+"probably safe by hand" becomes "proven safe and reversible."

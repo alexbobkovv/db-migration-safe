@@ -259,6 +259,52 @@ WHERE id IN (
 -- COMMIT between batches; sleep briefly to let replication/autovacuum catch up
 ```
 
+## 12. Index on a PARTITIONED table
+
+**Why dangerous:** `CREATE INDEX CONCURRENTLY` is **not supported on a partitioned parent**
+— Postgres raises `cannot create index on partitioned table ... concurrently` and the
+migration **fails outright**. The naive fallback, a plain `CREATE INDEX` on the parent, *does*
+run but takes a `SHARE` lock that recurses into **every** partition and blocks writes across
+the whole table for the entire build — an outage on a large partitioned table. Static linters
+do not know a table is partitioned, so they pass **both** forms; probe with
+`scripts/is_partitioned.sql` before indexing, or escalate to a clone dry-run.
+
+**Unsafe (errors at runtime on a partitioned parent):**
+```sql
+CREATE INDEX CONCURRENTLY idx_events_user_id ON events (user_id);
+```
+
+**Safe rewrite — build per-partition concurrently, then attach to an `ONLY` parent index:**
+```sql
+-- 1. build the index CONCURRENTLY on each existing partition (each its own statement, outside a txn)
+CREATE INDEX CONCURRENTLY idx_events_user_id_2026_06 ON events_2026_06 (user_id);
+CREATE INDEX CONCURRENTLY idx_events_user_id_2026_07 ON events_2026_07 (user_id);
+-- 2. create the parent index ON ONLY — metadata-only, no recursion; it starts INVALID
+CREATE INDEX idx_events_user_id ON ONLY events (user_id);
+-- 3. attach each partition's index; the parent flips to VALID once all are attached
+ALTER INDEX idx_events_user_id ATTACH PARTITION idx_events_user_id_2026_06;
+ALTER INDEX idx_events_user_id ATTACH PARTITION idx_events_user_id_2026_07;
+```
+
+Partitions created later via `CREATE TABLE ... PARTITION OF events` inherit the index
+automatically once the parent index exists. The same `ONLY`-parent-then-attach shape applies
+to a `UNIQUE`/`PRIMARY KEY` (the partition key must be part of the columns) and to
+`CHECK`/`FK` constraints added `NOT VALID` and validated per partition.
+
+**Dropping a partitioned index is also not concurrent.** `DROP INDEX CONCURRENTLY` on the
+parent raises `cannot drop partitioned index ... concurrently`, and a child index cannot be
+dropped on its own (`cannot drop index <child> because index <parent> requires it` — the
+children are owned by the parent). A `DROP INDEX` is metadata-only, though — no pages are
+scanned or rewritten — so the safe path is a **bounded, non-concurrent** drop on the parent,
+which cascades to every child:
+```sql
+SET lock_timeout = '5s';        -- fail fast instead of queueing behind a long query
+DROP INDEX idx_events_user_id;  -- brief AccessExclusiveLock, no data work; CONCURRENTLY is unavailable here
+```
+squawk's `require-concurrent-index-deletion` rule recommends `CONCURRENTLY` here — exactly the
+form that errors on a partitioned index — so suppress it with
+`-- squawk-ignore require-concurrent-index-deletion`.
+
 ---
 
 ## PG-version nuances to encode

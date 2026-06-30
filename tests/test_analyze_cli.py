@@ -1,7 +1,7 @@
 """A4 — analyze.py CLI exit codes / JSON / version, and build_verdict counts.
 
-Hermetic: the Postgres "no analyzer" path forces missing binaries via --squawk-bin /
---eugene-bin so the test holds even after Phase B installs squawk/eugene.
+Hermetic: the MySQL heuristic path needs no binaries. The Postgres install-free fallback
+(when neither squawk nor eugene is present) is covered in test_analyze_pg_heuristic.
 """
 import json
 import os
@@ -28,13 +28,6 @@ class Cli(unittest.TestCase):
         rc, _, err = run("does_not_exist.sql", "--dialect", "mysql")
         self.assertEqual(rc, 2)
         self.assertIn("file not found", err)
-
-    def test_postgres_no_analyzer_exit_2(self):
-        rc, _, err = run(CASE06, "--dialect", "postgres",
-                         "--squawk-bin", "/nonexistent/squawk",
-                         "--eugene-bin", "/nonexistent/eugene")
-        self.assertEqual(rc, 2)
-        self.assertIn("neither squawk nor eugene", err)
 
     def test_mysql_error_finding_exit_1(self):
         rc, out, _ = run(CASE06, "--dialect", "mysql")

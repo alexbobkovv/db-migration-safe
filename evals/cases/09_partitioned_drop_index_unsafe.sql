@@ -1,0 +1,15 @@
+-- Case 09 (UNSAFE): drop an unused index from a RANGE-partitioned table `events`.
+-- The index `idx_events_user_id` was created on the partitioned PARENT, so a child index
+-- exists on every partition.
+-- Hazard: there is NO concurrent way to drop a partitioned index.
+--   * `DROP INDEX CONCURRENTLY idx_events_user_id;` on the parent raises
+--     `cannot drop partitioned index "idx_events_user_id" concurrently` and FAILS.
+--   * The tempting workaround — `DROP INDEX CONCURRENTLY <child>` per partition first — also
+--     FAILS: `cannot drop index events_2026_06_user_id_idx because index idx_events_user_id
+--     requires it` (children are owned by the parent index, droppable only via the parent).
+-- NOTE: static linters cannot see that `events` is partitioned, so squawk + eugene PASS this
+--   file (0 errors) — and squawk's require-concurrent-index-deletion rule actively pushes the
+--   `CONCURRENTLY` form that errors here. The catch is scripts/is_partitioned.sql in PLAN, or
+--   a clone dry-run — NOT static lint.
+-- Catalog rewrite: postgres-catalog.md #12 (see 09_partitioned_drop_index_safe.sql).
+DROP INDEX CONCURRENTLY idx_events_user_id;

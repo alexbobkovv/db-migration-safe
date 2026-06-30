@@ -12,6 +12,12 @@
 [![Verified: squawk 2.58 · eugene 0.8.3](https://img.shields.io/badge/verified-squawk_2.58_%C2%B7_eugene_0.8.3-blue.svg)](references/tool-setup.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+**Your coding agent is one `ALTER TABLE` away from a production outage.** It will happily
+write `CREATE INDEX` and run it on a 10M-row table — and lock writes for minutes.
+`db-migration-safe` is the free guardrail that lets you let an agent near your database: it
+catches the lock hazard, rewrites the migration to zero-downtime, generates the rollback,
+and **refuses to run anything risky without you** (`EXECUTE` never auto-fires).
+
 An open-source Claude/Agent **Skill** that makes SQL schema migrations safe. It detects
 locking and blocking hazards, rewrites unsafe DDL into zero-downtime multi-step
 migrations, auto-generates rollbacks, and gates execution behind a
@@ -23,6 +29,16 @@ migrations, auto-generates rollbacks, and gates execution behind a
   materially weaker, and labeled as such.
 - **Engine-agnostic** — works on hand-written `.sql` or any ORM's generated SQL.
 - **Free / Apache-2.0** — it *wraps* existing open-source linters; it does not rebuild them.
+
+## Demo
+
+<p align="center">
+  <img src="assets/demo.gif" alt="analyze.py flags an unsafe CREATE INDEX, then the CONCURRENTLY rewrite re-lints clean" width="900">
+</p>
+
+> An agent writes a bare `CREATE INDEX` on a large table; `analyze.py` flags the
+> write-blocking lock (`squawk:require-concurrent-index-creation` + `eugene:E6`/`E9`) and
+> the `CONCURRENTLY` rewrite re-lints clean. `PLAN`/`VALIDATE` touch no database.
 
 ## Why this exists
 
@@ -50,6 +66,18 @@ This fills that gap.
 | Rollback generation | up/down convention | none | generated from the DDL; flags irreversible ops |
 | Cost | paid lock rules | free | free / OSS |
 
+**Does it actually work?** Measured across Haiku 4.5 / Sonnet 4.6 / Opus 4.8 over three rounds
+— common operations, then subtle traps (FK `NOT VALID`, `UNIQUE` concurrently,
+volatile-default rewrite, direct `SET NOT NULL`), then **partitioned indexes**: with the
+skill, **every model produced a machine-verified (0-error) safe rewrite plus a generated
+rollback on every task**. Unaided, the frontier models already write safe DDL on the first two
+rounds — the skill's baseline catch there is concentrated on the cheaper, faster model (Haiku
+**1/3** and **2/4** → clean). Round 3 is the exception that reaches a *frontier* model:
+`CREATE`/`DROP INDEX CONCURRENTLY` is silently unsupported on a partitioned parent, so Sonnet
+(and Haiku) reach for it and fail at deploy while static linters wave it through — only Opus
+gets it right unaided, and the skill's `is_partitioned.sql` probe + catalog #12 lift Sonnet
+and Haiku to safe. Full method and tables in [`evals/eval.md`](evals/eval.md).
+
 ## Install
 
 This is a Claude Code skill. Drop it where your skills live:
@@ -58,7 +86,10 @@ This is a Claude Code skill. Drop it where your skills live:
 git clone https://github.com/alexbobkovv/db-migration-safe ~/.claude/skills/db-migration-safe
 ```
 
-Then install the binaries it shells out to (only what you need) — see
+It works **install-free**: with no binaries present (or `analyze.py --no-external`), the
+Postgres path falls back to a stdlib heuristic over the cataloged ops so `PLAN`/CI still
+flag obviously-unsafe DDL — clearly labeled non-authoritative. Install the binaries it
+shells out to for authoritative analysis and the `VALIDATE` gate (only what you need) — see
 [`references/tool-setup.md`](references/tool-setup.md):
 
 ```bash
@@ -103,24 +134,57 @@ it runs only when you explicitly ask to apply the migration (see the Safety cont
 
 ## CI gate
 
-`analyze.py` exits nonzero on any error-level finding, so it drops straight into CI:
+`analyze.py` exits nonzero on any error-level finding, so it drops straight into CI. The
+easiest path is the bundled **GitHub Action** — it analyzes the migrations changed in a PR
+and uploads SARIF so findings annotate the diff inline (and land in the Security tab):
 
 ```yaml
 # .github/workflows/migrations.yml
 name: migration-safety
 on: pull_request
+permissions:
+  contents: read
+  security-events: write          # required to upload SARIF to code scanning
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm install -g squawk-cli
-      - run: mise use ubi:kaaveland/eugene@latest
+        with:
+          fetch-depth: 0            # so the Action can diff against the PR base
+      - uses: alexbobkovv/db-migration-safe@v1
+        with:
+          dialect: postgres         # or mysql
+          # files: db/migrate/*.sql # optional: override the changed-files default
+```
+
+It installs `squawk` for authoritative analysis and **falls back to the stdlib heuristic if
+that install fails**, so the gate never silently no-ops. Prefer to wire it by hand? The
+scripts are a plain CLI:
+
+```yaml
+      - run: pip install squawk-cli      # optional; heuristic fallback works without it
       - run: |
           for f in $(git diff --name-only origin/${{ github.base_ref }}... -- '*.sql'); do
-            python3 scripts/analyze.py "$f" --dialect postgres || exit 1
+            python3 scripts/migrate_safe.py analyze "$f" --dialect postgres || exit 1
           done
 ```
+
+## pre-commit hook
+
+Block unsafe DDL before it's even committed. Add to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/alexbobkovv/db-migration-safe
+    rev: v0.1.0
+    hooks:
+      - id: db-migration-safe          # runs on changed *.sql; postgres by default
+        # args: [--dialect, mysql]
+```
+
+It runs install-free via the heuristic, and uses `squawk`/`eugene` automatically when they
+are on your PATH.
 
 ## Versioning & upgrading
 
@@ -146,7 +210,7 @@ behavior is a minor bump; fixes are patches.
 ```
 SKILL.md            entry point (workflow + safety contract)
 references/         postgres-catalog · mysql-catalog · squawk-rules · eugene-hints · tool-setup
-scripts/           analyze.py · trace.py · gen_rollback.py · table_size.sql  (stdlib only)
+scripts/           migrate_safe.py (dispatcher) · analyze.py · trace.py · gen_rollback.py · table_size.sql · is_partitioned.sql  (stdlib only)
 evals/             baseline cases + methodology
 CHANGELOG.md        what changed per version
 CONTRIBUTING.md     dev setup · eval workflow · invariants
